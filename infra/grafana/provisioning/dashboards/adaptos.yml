@@ -1,0 +1,10 @@
+apiVersion: 1
+
+providers:
+  - name: adaptos
+    folder: AdaptOS
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards
