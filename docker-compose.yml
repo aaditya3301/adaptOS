@@ -1,0 +1,119 @@
+# AdaptOS local stack. Start with:  docker compose up -d --build
+# All values below have local-dev defaults; override them in a .env file (see .env.example).
+
+name: adaptos
+
+x-db-env: &db-env
+  POSTGRES_USER: ${POSTGRES_USER:-adaptos}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-adaptos}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      <<: *db-env
+      POSTGRES_DB: adaptos            # app data: request logs, feedback, monitoring windows
+    mem_limit: 256m
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d adaptos"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  mlflow:
+    build:
+      context: .
+      dockerfile: docker/mlflow.Dockerfile
+    environment:
+      <<: *db-env
+      # MLflow 3 starts ~9 background "job" worker processes (~2 GB) for its GenAI
+      # trace-scoring features. AdaptOS runs its own retraining pipeline, so turn them off.
+      MLFLOW_SERVER_ENABLE_JOB_EXECUTION: "false"
+      MLFLOW_SERVER_JOB_ENABLE_PERIODIC_TASKS: "false"
+    mem_limit: 512m
+    command: >
+      sh -c "mlflow server
+      --host 0.0.0.0 --port 5000 --workers 1
+      --backend-store-uri postgresql+psycopg2://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@postgres:5432/mlflow
+      --artifacts-destination /mlartifacts
+      --serve-artifacts
+      --allowed-hosts 'localhost,localhost:*,127.0.0.1,127.0.0.1:*,mlflow,mlflow:*'"
+    volumes:
+      - mlartifacts:/mlartifacts       # adapter weights, eval reports, datasets
+    ports:
+      - "5000:5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    restart: unless-stopped
+
+  gateway:
+    build:
+      context: .
+      dockerfile: docker/gateway.Dockerfile
+    environment:
+      ADAPTOS_MLFLOW_TRACKING_URI: http://mlflow:5000
+      ADAPTOS_DATABASE_URL: postgresql://${POSTGRES_USER:-adaptos}:${POSTGRES_PASSWORD:-adaptos}@postgres:5432/adaptos
+      ADAPTOS_LOG_LEVEL: ${ADAPTOS_LOG_LEVEL:-INFO}
+    # Phase 0 gateway has no model loaded. Phase 5 loads the 0.5B model + adapters,
+    # which needs roughly 2.5-3 GB; this limit is raised then.
+    mem_limit: 256m
+    volumes:
+      - ./configs:/app/configs:ro     # edit configs without rebuilding the image
+    ports:
+      - "8000:8000"
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    mem_limit: 256m
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - promdata:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      - gateway
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:12.1.0
+    mem_limit: 384m
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/adaptos-overview.json
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  mlartifacts:
+  promdata:
+  grafanadata:
