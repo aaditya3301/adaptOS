@@ -1,0 +1,29 @@
+name: math
+description: Grade-school math word problem -> step-by-step solution and final answer
+registered_model: adaptos-adapter-math
+
+dataset:
+  hf_id: openai/gsm8k
+  hf_config: main
+  train_size: 800
+  eval_size: 200
+  golden_size: 100
+  seed: 42
+
+lora:
+  r: 8
+  alpha: 16
+  dropout: 0.05
+  target_modules: [q_proj, k_proj, v_proj, o_proj]
+
+training:
+  epochs: 1
+  learning_rate: 2.0e-4
+  batch_size: 4
+  grad_accum_steps: 4
+  max_seq_len: 512
+
+evaluation:
+  primary_metric: answer_accuracy   # final numeric answer matches the reference
+  min_score: 0.15
+  promotion_min_delta: 0.01

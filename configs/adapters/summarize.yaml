@@ -1,0 +1,28 @@
+name: summarize
+description: Dialogue -> short summary
+registered_model: adaptos-adapter-summarize
+
+dataset:
+  hf_id: knkarthick/dialogsum
+  train_size: 800
+  eval_size: 200
+  golden_size: 100
+  seed: 42
+
+lora:
+  r: 8
+  alpha: 16
+  dropout: 0.05
+  target_modules: [q_proj, k_proj, v_proj, o_proj]
+
+training:
+  epochs: 1
+  learning_rate: 2.0e-4
+  batch_size: 4
+  grad_accum_steps: 4
+  max_seq_len: 512
+
+evaluation:
+  primary_metric: rougeL
+  min_score: 0.20
+  promotion_min_delta: 0.005

@@ -1,0 +1,28 @@
+name: sql
+description: Natural-language question + table schema -> SQL query
+registered_model: adaptos-adapter-sql
+
+dataset:
+  hf_id: b-mc2/sql-create-context
+  train_size: 800
+  eval_size: 200
+  golden_size: 100
+  seed: 42
+
+lora:
+  r: 8
+  alpha: 16
+  dropout: 0.05
+  target_modules: [q_proj, k_proj, v_proj, o_proj]
+
+training:
+  epochs: 1
+  learning_rate: 2.0e-4
+  batch_size: 4
+  grad_accum_steps: 4
+  max_seq_len: 384
+
+evaluation:
+  primary_metric: execution_match   # generated SQL returns the same rows as the reference
+  min_score: 0.30                   # absolute floor a version must reach to be promoted
+  promotion_min_delta: 0.01         # must beat the current champion by at least this much
