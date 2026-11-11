@@ -1,0 +1,23 @@
+# Global AdaptOS configuration.
+# Secrets and service URLs come from environment variables (ADAPTOS_*), not from this file.
+
+project: adaptos
+
+base_model:
+  name: Qwen/Qwen2.5-0.5B-Instruct            # used for real training/serving
+  test_name: HuggingFaceTB/SmolLM2-135M-Instruct  # tiny model for fast tests and CI
+  device: cpu
+  dtype: float32
+
+# Pluggable backends: CPU-friendly defaults; GPU options can be switched in later.
+backends:
+  training: lora    # lora | qlora (qlora needs an NVIDIA GPU)
+  inference: peft   # peft | vllm  (vllm needs an NVIDIA GPU)
+
+mlflow:
+  experiment_prefix: adaptos
+
+router:
+  embedding_model: sentence-transformers/all-MiniLM-L6-v2
+  registered_model: adaptos-router
+  confidence_threshold: 0.6   # below this, answer with the plain base model
