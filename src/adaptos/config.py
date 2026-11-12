@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="ADAPTOS_", env_file=".env", extra="ignore")
 
     config_dir: Path = REPO_ROOT / "configs"
+    data_dir: Path = REPO_ROOT / "data"
     mlflow_tracking_uri: str = "http://localhost:5000"
     database_url: str = "postgresql://adaptos:adaptos@localhost:5432/adaptos"
     log_level: str = "INFO"
@@ -52,13 +53,30 @@ class RouterConfig(BaseModel):
     confidence_threshold: float = Field(ge=0.0, le=1.0)
 
 
+class DriftConfig(BaseModel):
+    """A held-out slice of the data that the adapter never trains on at first.
+
+    It plays the role of a "new kind" of user request in the retraining demo:
+    ``eval_size`` examples measure the degradation, ``train_size`` examples are the
+    fresh labeled data the retraining pipeline gets.
+    """
+
+    rule: str
+    params: dict[str, Any] = Field(default_factory=dict)
+    train_size: int = Field(gt=0)
+    eval_size: int = Field(gt=0)
+
+
 class DatasetConfig(BaseModel):
     hf_id: str
     hf_config: str | None = None
+    revision: str = Field(min_length=7)  # pinned dataset commit, for reproducibility
+    source_split: str = "train"
     train_size: int = Field(gt=0)
     eval_size: int = Field(gt=0)
     golden_size: int = Field(gt=0)
     seed: int = 42
+    drift: DriftConfig
 
 
 class LoraConfig(BaseModel):
