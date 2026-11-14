@@ -4,10 +4,13 @@
 project: adaptos
 
 base_model:
-  name: Qwen/Qwen2.5-0.5B-Instruct            # used for real training/serving
-  test_name: HuggingFaceTB/SmolLM2-135M-Instruct  # tiny model for fast tests and CI
+  name: Qwen/Qwen2.5-0.5B-Instruct                 # used for real training/serving
+  revision: 7ae557604adf67be50417f59c2c2f167def9a775  # pinned model commit
+  test_name: HuggingFaceTB/SmolLM2-135M-Instruct     # small model for quick experiments
+  test_revision: 12fd25f77366fa6b3b4b768ec3050bf629380bac
   device: cpu
   dtype: float32
+  num_threads: 6                                     # = physical CPU cores
 
 # Pluggable backends: CPU-friendly defaults; GPU options can be switched in later.
 backends:
