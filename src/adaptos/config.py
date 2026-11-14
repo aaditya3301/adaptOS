@@ -26,6 +26,7 @@ class Settings(BaseSettings):
 
     config_dir: Path = REPO_ROOT / "configs"
     data_dir: Path = REPO_ROOT / "data"
+    artifacts_dir: Path = REPO_ROOT / "artifacts"
     mlflow_tracking_uri: str = "http://localhost:5000"
     database_url: str = "postgresql://adaptos:adaptos@localhost:5432/adaptos"
     log_level: str = "INFO"
@@ -33,9 +34,18 @@ class Settings(BaseSettings):
 
 class LLMConfig(BaseModel):
     name: str
+    revision: str = Field(min_length=7)
     test_name: str
+    test_revision: str = Field(min_length=7)
     device: Literal["cpu", "cuda"] = "cpu"
     dtype: Literal["float32", "bfloat16", "float16"] = "float32"
+    num_threads: int | None = Field(default=None, gt=0)
+
+    def resolve(self, use_test_model: bool = False) -> tuple[str, str]:
+        """(model id, pinned revision) for the main or the small test model."""
+        return (
+            (self.test_name, self.test_revision) if use_test_model else (self.name, self.revision)
+        )
 
 
 class BackendConfig(BaseModel):
@@ -92,6 +102,10 @@ class TrainingConfig(BaseModel):
     batch_size: int = Field(gt=0)
     grad_accum_steps: int = Field(gt=0)
     max_seq_len: int = Field(gt=0)
+    warmup_ratio: float = Field(default=0.05, ge=0.0, lt=1.0)
+    weight_decay: float = Field(default=0.0, ge=0.0)
+    max_grad_norm: float = Field(default=1.0, gt=0.0)
+    eval_loss_samples: int = Field(default=50, gt=0)  # eval-loss subset (full metrics: Phase 3)
 
 
 class EvaluationConfig(BaseModel):
