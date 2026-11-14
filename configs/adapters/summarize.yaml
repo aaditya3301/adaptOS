@@ -4,10 +4,17 @@ registered_model: adaptos-adapter-summarize
 
 dataset:
   hf_id: knkarthick/dialogsum
+  revision: a968e7aee0602e257935f1321a02e4287f7d5848
   train_size: 800
   eval_size: 200
   golden_size: 100
   seed: 42
+  drift:                      # held out: long conversations
+    rule: long_dialogue
+    params:
+      min_turns: 14
+    train_size: 200
+    eval_size: 100
 
 lora:
   r: 8
@@ -26,3 +33,6 @@ evaluation:
   primary_metric: rougeL
   min_score: 0.20
   promotion_min_delta: 0.005
+
+generation:
+  max_new_tokens: 96

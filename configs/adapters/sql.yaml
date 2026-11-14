@@ -4,10 +4,15 @@ registered_model: adaptos-adapter-sql
 
 dataset:
   hf_id: b-mc2/sql-create-context
+  revision: 9d80a6a118b838d9defc3798d659a54a2ac2ff37
   train_size: 800
   eval_size: 200
   golden_size: 100
   seed: 42
+  drift:                      # held out: queries with aggregation (COUNT/SUM/AVG/MIN/MAX/GROUP BY)
+    rule: aggregation
+    train_size: 200
+    eval_size: 100
 
 lora:
   r: 8
@@ -26,3 +31,6 @@ evaluation:
   primary_metric: execution_match   # generated SQL returns the same rows as the reference
   min_score: 0.30                   # absolute floor a version must reach to be promoted
   promotion_min_delta: 0.01         # must beat the current champion by at least this much
+
+generation:
+  max_new_tokens: 96

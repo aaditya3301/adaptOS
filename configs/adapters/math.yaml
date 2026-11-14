@@ -5,10 +5,17 @@ registered_model: adaptos-adapter-math
 dataset:
   hf_id: openai/gsm8k
   hf_config: main
+  revision: 740312add88f781978c0658806c59bc2815b9866
   train_size: 800
   eval_size: 200
   golden_size: 100
   seed: 42
+  drift:                      # held out: problems that need many reasoning steps
+    rule: multi_step
+    params:
+      min_steps: 5
+    train_size: 200
+    eval_size: 100
 
 lora:
   r: 8
@@ -27,3 +34,6 @@ evaluation:
   primary_metric: answer_accuracy   # final numeric answer matches the reference
   min_score: 0.15
   promotion_min_delta: 0.01
+
+generation:
+  max_new_tokens: 256
