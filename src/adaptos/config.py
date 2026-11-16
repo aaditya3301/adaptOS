@@ -57,10 +57,24 @@ class MLflowConfig(BaseModel):
     experiment_prefix: str = "adaptos"
 
 
+class OtherDatasetConfig(BaseModel):
+    hf_id: str
+    revision: str = Field(min_length=7)
+    exclude_categories: list[str] = Field(default_factory=list)
+    train_size: int = Field(gt=0)
+    eval_size: int = Field(gt=0)
+    test_size: int = Field(gt=0)
+    seed: int = 42
+
+
 class RouterConfig(BaseModel):
     embedding_model: str
+    embedding_revision: str = Field(min_length=7)
     registered_model: str
     confidence_threshold: float = Field(ge=0.0, le=1.0)
+    min_accuracy: float = Field(default=0.95, ge=0.0, le=1.0)
+    strip_instruction_prob: float = Field(default=0.5, ge=0.0, le=1.0)
+    other_dataset: OtherDatasetConfig
 
 
 class DriftConfig(BaseModel):
@@ -109,9 +123,20 @@ class TrainingConfig(BaseModel):
 
 
 class EvaluationConfig(BaseModel):
+    """Promotion gate. A candidate becomes champion only if it:
+    - reaches ``min_score`` on the golden set,
+    - does not drop more than ``max_regression`` below the champion on the golden set, and
+    - beats the champion by ``promotion_min_delta`` on the golden set OR on the drift set.
+    """
+
     primary_metric: str
     min_score: float = Field(ge=0.0, le=1.0)
     promotion_min_delta: float = Field(ge=0.0)
+    max_regression: float = Field(default=0.02, ge=0.0)
+
+
+class GenerationConfig(BaseModel):
+    max_new_tokens: int = Field(default=128, gt=0)
 
 
 class AdapterConfig(BaseModel):
@@ -122,6 +147,7 @@ class AdapterConfig(BaseModel):
     lora: LoraConfig
     training: TrainingConfig
     evaluation: EvaluationConfig
+    generation: GenerationConfig = Field(default_factory=GenerationConfig)
 
 
 class AdapterThresholds(BaseModel):
