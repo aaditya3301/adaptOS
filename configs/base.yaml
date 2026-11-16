@@ -22,5 +22,17 @@ mlflow:
 
 router:
   embedding_model: sentence-transformers/all-MiniLM-L6-v2
+  embedding_revision: 1110a243fdf4706b3f48f1d95db1a4f5529b4d41
   registered_model: adaptos-router
   confidence_threshold: 0.6   # below this, answer with the plain base model
+  min_accuracy: 0.95          # promotion gate: test accuracy a router version must reach
+  strip_instruction_prob: 0.5 # train on some requests without "Summarize this ...", so the
+                              # router learns from content, not from a fixed prefix
+  other_dataset:              # general requests that should go to the plain base model
+    hf_id: databricks/databricks-dolly-15k
+    revision: bdd27f4d94b9c1f951818a7da7fd7aeea5dbff1a
+    exclude_categories: [summarization]   # avoid overlap with the summarize adapter
+    train_size: 800
+    eval_size: 200
+    test_size: 100
+    seed: 42
