@@ -18,7 +18,15 @@ ENV = {**os.environ, "PYTHONUTF8": "1", "MLFLOW_DISABLE_AGENT_HINT": "1"}
 TASKS: dict[str, tuple[str, list[list[str]]]] = {
     "install": (
         "Install the project with dev tools",
-        [[PY, "-m", "pip", "install", "-e", ".[dev,data]"]],
+        [[PY, "-m", "pip", "install", "-e", ".[dev,data,train]"]],
+    ),
+    "train": (
+        "Train all adapters and register them in MLflow",
+        [[PY, "-m", "adaptos.training.train_adapter", "--adapter", "all"]],
+    ),
+    "evaluate": (
+        "Evaluate the newest adapter versions and run the promotion gate",
+        [[PY, "-m", "adaptos.evaluation.evaluate", "--adapter", "all"]],
     ),
     "data": (
         "Build all datasets and register them in MLflow",
