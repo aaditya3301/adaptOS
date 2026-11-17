@@ -26,6 +26,7 @@ from typing import Any
 from adaptos.config import AppConfig, Settings, get_settings, load_config
 from adaptos.data.io import load_split, verify_dataset
 from adaptos.log import configure_logging, get_logger
+from adaptos.monitoring.drift import build_reference, save_reference
 from adaptos.prompts import PROMPT_VERSION
 from adaptos.provenance import git_commit
 from adaptos.registry.adapters import (
@@ -393,6 +394,9 @@ def train_adapter(
         if adapter_dir.exists():
             shutil.rmtree(adapter_dir)
         model.save_pretrained(str(adapter_dir))
+        # Feature statistics of this version's training inputs: the drift monitor compares
+        # live traffic against them, so retraining on new data also moves the reference.
+        save_reference(adapter_dir, build_reference(task, [ex.input for ex in train_examples]))
         info = {**run_params, "trigger": trigger, "metrics": metrics}
         (adapter_dir / "adaptos_info.json").write_text(
             json.dumps(info, indent=2, default=str), encoding="utf-8"

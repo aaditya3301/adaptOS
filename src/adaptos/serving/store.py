@@ -20,6 +20,7 @@ from sqlalchemy import (
     Text,
     create_engine,
     insert,
+    inspect,
     select,
     update,
 )
@@ -41,7 +42,8 @@ requests_table = Table(
     Column("route_reason", String(32)),
     Column("latency_ms", Float),
     Column("output_tokens", Integer),
-    Column("quality_score", Float),  # filled by online scoring (Phase 6)
+    Column("quality_score", Float),  # reference-free online quality (monitoring/quality.py)
+    Column("quality_checks", Text),  # JSON with the individual checks behind the score
     Column("feedback", String(8)),  # "up" | "down"
     Column("correction", Text),  # optional corrected answer from the user
 )
@@ -59,7 +61,14 @@ class RequestStore:
         self.engine = create_engine(_sqlalchemy_url(url), pool_pre_ping=True)
 
     def init_schema(self) -> None:
+        """Create the table, and add columns introduced after it was first created."""
         metadata.create_all(self.engine)
+        existing = {c["name"] for c in inspect(self.engine).get_columns("requests")}
+        with self.engine.begin() as conn:
+            for column in requests_table.columns:
+                if column.name not in existing:
+                    ddl = column.type.compile(dialect=self.engine.dialect)
+                    conn.exec_driver_sql(f"ALTER TABLE requests ADD COLUMN {column.name} {ddl}")
 
     def ping(self) -> bool:
         try:
@@ -94,17 +103,14 @@ class RequestStore:
             )
         return dict(row) if row else None
 
-    def recent(self, adapter: str, limit: int) -> list[dict[str, Any]]:
-        """Most recent requests served by ``adapter`` (newest first)."""
+    def recent(
+        self, adapter: str, version: str | None = None, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        """Most recent requests served by ``adapter`` (optionally one version), newest first."""
+        query = select(requests_table).where(requests_table.c.adapter == adapter)
+        if version is not None:
+            query = query.where(requests_table.c.adapter_version == str(version))
+        query = query.order_by(requests_table.c.created_at.desc()).limit(limit)
         with self.engine.connect() as conn:
-            rows = (
-                conn.execute(
-                    select(requests_table)
-                    .where(requests_table.c.adapter == adapter)
-                    .order_by(requests_table.c.created_at.desc())
-                    .limit(limit)
-                )
-                .mappings()
-                .all()
-            )
+            rows = conn.execute(query).mappings().all()
         return [dict(r) for r in rows]
