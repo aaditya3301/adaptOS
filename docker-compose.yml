@@ -40,6 +40,7 @@ services:
     command: >
       sh -c "mlflow server
       --host 0.0.0.0 --port 5000 --workers 1
+      --uvicorn-opts '--timeout-keep-alive 120'
       --backend-store-uri postgresql+psycopg2://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@postgres:5432/mlflow
       --artifacts-destination /mlartifacts
       --serve-artifacts
@@ -67,14 +68,17 @@ services:
       ADAPTOS_MLFLOW_TRACKING_URI: http://mlflow:5000
       ADAPTOS_DATABASE_URL: postgresql://${POSTGRES_USER:-adaptos}:${POSTGRES_PASSWORD:-adaptos}@postgres:5432/adaptos
       ADAPTOS_LOG_LEVEL: ${ADAPTOS_LOG_LEVEL:-INFO}
-    # Phase 0 gateway has no model loaded. Phase 5 loads the 0.5B model + adapters,
-    # which needs roughly 2.5-3 GB; this limit is raised then.
-    mem_limit: 256m
+      ADAPTOS_ADMIN_TOKEN: ${ADAPTOS_ADMIN_TOKEN:-dev-admin-token}
+    # 0.5B base model in bfloat16 (~1 GB) + 3 LoRA adapters + router embedding model.
+    mem_limit: 2560m
     volumes:
       - ./configs:/app/configs:ro     # edit configs without rebuilding the image
+      - gatewaycache:/app/cache       # model weights + registry downloads, fetched once
     ports:
       - "8000:8000"
     depends_on:
+      postgres:
+        condition: service_healthy
       mlflow:
         condition: service_healthy
     restart: unless-stopped
@@ -117,3 +121,4 @@ volumes:
   mlartifacts:
   promdata:
   grafanadata:
+  gatewaycache:
