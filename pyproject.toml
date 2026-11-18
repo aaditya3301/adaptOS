@@ -16,11 +16,31 @@ dependencies = [
     "uvicorn[standard]>=0.32",
     "prometheus-client>=0.21",
     "mlflow-skinny>=3.1",
+    "sqlalchemy>=2.0",
+    "psycopg[binary]>=3.2",
 ]
 
 [project.optional-dependencies]
 data = [
     "datasets>=4.0",
+]
+# On Linux, install the CPU build of torch first:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+train = [
+    "torch>=2.5",
+    "transformers>=4.56",
+    "peft>=0.14",
+    "safetensors>=0.4",
+    "psutil>=5.9",
+]
+router = [
+    "numpy>=1.26",
+    "sentence-transformers>=3.0",
+    "scikit-learn>=1.5",
+]
+gpu = [
+    "bitsandbytes>=0.45",   # 4-bit quantization for QLoRA (NVIDIA GPU only)
+    "nvidia-ml-py>=12.0",   # GPU utilization in MLflow system metrics
 ]
 dev = [
     "pytest>=8.3",
@@ -42,4 +62,5 @@ select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 addopts = "-ra"
