@@ -25,6 +25,7 @@ class InferenceEngine:
         revision: str,
         device: str = "cpu",
         num_threads: int | None = None,
+        dtype: str | None = None,
         model_loader: Any = None,
     ):
         import torch
@@ -38,9 +39,15 @@ class InferenceEngine:
             from transformers import AutoModelForCausalLM, AutoTokenizer
 
             self.tokenizer = AutoTokenizer.from_pretrained(model_id, revision=revision)
-            # fp16 on GPU, fp32 on CPU (CPUs without bf16 support are slow in half precision)
-            dtype = torch.float16 if device == "cuda" else torch.float32
-            base = AutoModelForCausalLM.from_pretrained(model_id, revision=revision, dtype=dtype)
+            # Default: fp16 on GPU, fp32 on CPU. Serving passes bfloat16 (measured faster on CPU).
+            torch_dtype = (
+                getattr(torch, dtype)
+                if dtype
+                else (torch.float16 if device == "cuda" else torch.float32)
+            )
+            base = AutoModelForCausalLM.from_pretrained(
+                model_id, revision=revision, dtype=torch_dtype
+            )
         self.tokenizer.padding_side = "left"  # decoder-only models generate after the prompt
         if self.tokenizer.pad_token_id is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -76,6 +83,9 @@ class InferenceEngine:
             else:
                 self.model.delete_adapter(name)
             del self.adapters[name]
+
+    def count_tokens(self, text: str) -> int:
+        return len(self.tokenizer(text, add_special_tokens=False)["input_ids"])
 
     # -------------------------------------------------------------- generation
     def generate(

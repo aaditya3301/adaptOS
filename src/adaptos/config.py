@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     mlflow_tracking_uri: str = "http://localhost:5000"
     database_url: str = "postgresql://adaptos:adaptos@localhost:5432/adaptos"
     log_level: str = "INFO"
+    admin_token: str = ""  # required in the X-Admin-Token header for /admin/*; empty = disabled
 
 
 class LLMConfig(BaseModel):
@@ -55,6 +56,13 @@ class BackendConfig(BaseModel):
 
 class MLflowConfig(BaseModel):
     experiment_prefix: str = "adaptos"
+
+
+class ServingConfig(BaseModel):
+    dtype: Literal["float32", "bfloat16"] = "bfloat16"
+    num_threads: int | None = Field(default=None, gt=0)
+    base_max_new_tokens: int = Field(default=256, gt=0)
+    max_input_chars: int = Field(default=8000, gt=0)
 
 
 class OtherDatasetConfig(BaseModel):
@@ -174,6 +182,7 @@ class AppConfig(BaseModel):
     base_model: LLMConfig
     backends: BackendConfig
     mlflow: MLflowConfig
+    serving: ServingConfig = Field(default_factory=ServingConfig)
     router: RouterConfig
     adapters: dict[str, AdapterConfig]
     monitor: MonitorConfig
