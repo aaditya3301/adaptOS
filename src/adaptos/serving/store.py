@@ -114,3 +114,17 @@ class RequestStore:
         with self.engine.connect() as conn:
             rows = conn.execute(query).mappings().all()
         return [dict(r) for r in rows]
+
+    def corrections(self, adapter: str, limit: int = 1000) -> list[dict[str, Any]]:
+        """Requests that users rated down and corrected (newest first): new labeled data."""
+        query = (
+            select(requests_table)
+            .where(requests_table.c.adapter == adapter)
+            .where(requests_table.c.feedback == "down")
+            .where(requests_table.c.correction.is_not(None))
+            .order_by(requests_table.c.created_at.desc())
+            .limit(limit)
+        )
+        with self.engine.connect() as conn:
+            rows = conn.execute(query).mappings().all()
+        return [dict(r) for r in rows]

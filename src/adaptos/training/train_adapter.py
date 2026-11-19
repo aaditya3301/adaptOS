@@ -25,6 +25,7 @@ from typing import Any
 
 from adaptos.config import AppConfig, Settings, get_settings, load_config
 from adaptos.data.io import load_split, verify_dataset
+from adaptos.data.schema import Example
 from adaptos.log import configure_logging, get_logger
 from adaptos.monitoring.drift import build_reference, save_reference
 from adaptos.prompts import PROMPT_VERSION
@@ -155,7 +156,11 @@ def train_adapter(
     task: str,
     *,
     use_test_model: bool = False,
-    extra_splits: Sequence[str] = (),
+    splits: Sequence[str] = ("train",),
+    split_limits: dict[str, int] | None = None,
+    extra_examples: Sequence[Example] = (),
+    extra_tags: dict[str, str] | None = None,
+    epochs: float | None = None,
     init_adapter_dir: Path | None = None,
     trigger: str = "manual",
     max_steps: int | None = None,
@@ -171,13 +176,15 @@ def train_adapter(
     """Train one adapter. ``model_loader`` lets tests inject a tiny model and tokenizer.
 
     ``device`` / ``backend`` override the config (e.g. ``cuda`` + ``qlora`` on a GPU machine).
+    Retraining passes several ``splits`` with ``split_limits`` (rehearsal of old data),
+    ``extra_examples`` (user corrections), a starting adapter and a trigger reason.
     """
     import torch
 
     settings = settings or get_settings()
     app = app or load_config(settings.config_dir)
     cfg = app.adapters[task]
-    tcfg = cfg.training
+    tcfg = cfg.training if epochs is None else cfg.training.model_copy(update={"epochs": epochs})
     base = app.base_model
     model_id, revision = base.resolve(use_test_model)
     device = device or base.device
@@ -191,8 +198,18 @@ def train_adapter(
     # ---- data (verified against the manifest before use)
     task_dir = settings.data_dir / "processed" / task
     manifest = verify_dataset(task_dir)
-    splits = ["train", *extra_splits]
-    train_examples = [ex for s in splits for ex in load_split(task_dir, s)]
+    split_limits = split_limits or {}
+    train_examples: list[Example] = []
+    sources = []
+    for s in splits:
+        examples = load_split(task_dir, s)  # already shuffled by the data pipeline
+        if s in split_limits:
+            examples = examples[: split_limits[s]]
+        train_examples += examples
+        sources.append(f"{s}:{len(examples)}")
+    if extra_examples:
+        train_examples += list(extra_examples)
+        sources.append(f"feedback:{len(extra_examples)}")
     if limit:
         train_examples = train_examples[:limit]
     eval_examples = load_split(task_dir, "eval")[: tcfg.eval_loss_samples]
@@ -255,7 +272,7 @@ def train_adapter(
         "base_model": model_id,
         "base_revision": revision,
         "dataset_version": manifest["dataset_version"],
-        "train_splits": ",".join(splits),
+        "train_sources": ",".join(sources),
         "n_train": len(train_items),
         "n_eval_loss": len(eval_items),
         "prompt_version": PROMPT_VERSION,
@@ -292,6 +309,7 @@ def train_adapter(
         "backend": backend,
         "compute": compute,
         "git_commit": git_commit(),
+        **(extra_tags or {}),
     }
 
     tracker = _Tracker(use_mlflow)
@@ -432,7 +450,7 @@ def train_adapter(
                         "compute": compute,
                     },
                     description=(
-                        f"Trained on {len(train_items)} examples ({'+'.join(splits)}), "
+                        f"Trained on {len(train_items)} examples ({', '.join(sources)}), "
                         f"dataset {manifest['dataset_version']}, trigger: {trigger}"
                     ),
                     tracking_uri=settings.mlflow_tracking_uri,

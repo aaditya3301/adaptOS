@@ -36,6 +36,10 @@ TASKS: dict[str, tuple[str, list[list[str]]]] = {
         "Train, evaluate and register the request router",
         [[PY, "-m", "adaptos.training.train_router"]],
     ),
+    "controller": (
+        "Watch adapter health and retrain automatically on alerts",
+        [[PY, "-m", "adaptos.retraining.controller"]],
+    ),
     "lint": (
         "Run ruff lint + format check",
         [
