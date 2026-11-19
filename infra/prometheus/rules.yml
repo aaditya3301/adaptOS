@@ -1,0 +1,33 @@
+groups:
+  - name: adaptos
+    rules:
+      - alert: AdapterDegraded
+        # The gateway's monitor sets this when an adapter's recent window breaches its
+        # quality or drift threshold (configs/monitor.yaml).
+        expr: adaptos_adapter_alert == 1
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Adapter {{ $labels.adapter }} breached its quality or drift threshold"
+          description: >-
+            Window quality {{ with printf "adaptos_window_quality{adapter='%s'}" $labels.adapter | query }}{{ . | first | value | printf "%.2f" }}{{ end }},
+            drift {{ with printf "adaptos_window_drift{adapter='%s'}" $labels.adapter | query }}{{ . | first | value | printf "%.2f" }}{{ end }}.
+
+      - alert: GatewayDown
+        expr: up{job="gateway"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "AdaptOS gateway is not reachable"
+
+      - alert: GatewayErrors
+        expr: >-
+          sum(rate(adaptos_http_requests_total{status=~"5.."}[5m]))
+          / clamp_min(sum(rate(adaptos_http_requests_total[5m])), 1e-9) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "More than 5% of gateway requests are failing"
