@@ -5,6 +5,7 @@ Run with:  uvicorn adaptos.serving.app:create_app --factory --port 8000
     POST /chat              route a request to the right adapter and answer it
     POST /feedback          thumbs up/down (+ optional correction) for an answer
     GET  /models            live router/adapter versions
+    GET  /monitoring        rolling-window quality, drift and alert status per adapter
     POST /admin/reload      hot-swap to the registry's current champions   (X-Admin-Token)
     POST /admin/rollback    move a model back to its previous version      (X-Admin-Token)
     GET  /health /ready /info /metrics
@@ -12,6 +13,7 @@ Run with:  uvicorn adaptos.serving.app:create_app --factory --port 8000
 
 from __future__ import annotations
 
+import json
 import secrets
 import threading
 import time
@@ -30,14 +32,24 @@ from adaptos import __version__
 from adaptos.config import Settings, get_settings, load_config
 from adaptos.log import configure_logging, get_logger
 from adaptos.monitoring.metrics import (
+    ADAPTER_ALERT,
+    DRIFT_THRESHOLD,
     FEEDBACK,
     GENERATION_LATENCY,
     HTTP_LATENCY,
     HTTP_REQUESTS,
     OUTPUT_TOKENS,
+    QUALITY_SCORE,
+    QUALITY_THRESHOLD,
     ROUTED_REQUESTS,
     ROUTER_CONFIDENCE,
+    WINDOW_DRIFT,
+    WINDOW_DRIFT_FEATURE,
+    WINDOW_QUALITY,
+    WINDOW_SAMPLES,
 )
+from adaptos.monitoring.monitor import Monitor, WindowStats
+from adaptos.monitoring.quality import score_online
 from adaptos.serving.models import BASE, ROUTER, ModelManager
 from adaptos.serving.store import RequestStore
 
@@ -65,6 +77,7 @@ class ChatResponse(BaseModel):
     adapter: str
     adapter_version: str | None
     route: RouteInfo
+    quality: float | None = Field(description="reference-free quality score (None for base)")
     latency_ms: float
 
 
@@ -86,11 +99,24 @@ def _mlflow_reachable(tracking_uri: str, timeout: float = 2.0) -> bool:
         return False
 
 
+def publish_window_metrics(stats: dict[str, WindowStats]) -> None:
+    for adapter, s in stats.items():
+        WINDOW_SAMPLES.labels(adapter).set(s.samples)
+        if s.quality is not None:
+            WINDOW_QUALITY.labels(adapter).set(s.quality)
+        if s.drift is not None:
+            WINDOW_DRIFT.labels(adapter).set(s.drift)
+        for feature, shift in s.drift_features.items():
+            WINDOW_DRIFT_FEATURE.labels(adapter, feature).set(shift)
+        ADAPTER_ALERT.labels(adapter).set(1 if s.status == "alert" else 0)
+
+
 def create_app(
     settings: Settings | None = None,
     manager: ModelManager | None = None,
     store: RequestStore | None = None,
     load_models: bool = True,
+    monitor_loop: bool = True,
 ) -> FastAPI:
     settings = settings or get_settings()
     configure_logging(settings.log_level)
@@ -98,6 +124,24 @@ def create_app(
     manager = manager or ModelManager(config, settings)
     store = store or RequestStore(settings.database_url)
     known_models = {ROUTER, *config.adapters}
+    monitor = Monitor(
+        config.monitor,
+        recent=lambda adapter, version, limit: store.recent(adapter, version, limit),
+        live=lambda: {m: v for m, v in manager.live.items() if m != ROUTER},
+        reference=lambda adapter: manager.references.get(adapter),
+    )
+    for adapter, t in config.monitor.thresholds.items():
+        QUALITY_THRESHOLD.labels(adapter).set(t.quality_min)
+        DRIFT_THRESHOLD.labels(adapter).set(t.drift_max)
+    stop = threading.Event()
+
+    def monitor_forever() -> None:
+        while not stop.wait(config.monitor.check_interval_seconds):
+            if manager.ready:
+                try:
+                    publish_window_metrics(monitor.check())
+                except Exception:
+                    logger.exception("monitor check failed")
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -107,7 +151,10 @@ def create_app(
             logger.exception("request store unavailable; requests will not be logged")
         if load_models:  # loads in the background; /ready reports progress
             threading.Thread(target=manager.load, name="model-loader", daemon=True).start()
+        if monitor_loop:
+            threading.Thread(target=monitor_forever, name="monitor", daemon=True).start()
         yield
+        stop.set()
 
     app = FastAPI(title="AdaptOS Gateway", version=__version__, lifespan=lifespan)
     app.state.settings, app.state.config = settings, config
@@ -156,6 +203,10 @@ def create_app(
         ROUTER_CONFIDENCE.labels(d.label).observe(d.confidence)
         GENERATION_LATENCY.labels(result.adapter).observe(result.generate_ms / 1000)
         OUTPUT_TOKENS.labels(result.adapter).inc(result.output_tokens)
+        checks = score_online(d.adapter, req.message, result.answer)
+        quality = checks["quality"] if checks else None
+        if quality is not None:
+            QUALITY_SCORE.labels(result.adapter).observe(quality)
         try:
             store.log_request(
                 request_id=request_id,
@@ -169,6 +220,8 @@ def create_app(
                 route_reason=d.reason,
                 latency_ms=latency_ms,
                 output_tokens=result.output_tokens,
+                quality_score=quality,
+                quality_checks=json.dumps(checks) if checks else None,
             )
         except Exception:
             logger.exception("could not log request %s", request_id)
@@ -184,6 +237,7 @@ def create_app(
                 reason=d.reason,
                 router_version=result.router_version,
             ),
+            quality=None if quality is None else round(quality, 3),
             latency_ms=round(latency_ms, 1),
         )
 
@@ -194,6 +248,20 @@ def create_app(
             raise HTTPException(404, "unknown request_id")
         FEEDBACK.labels(row["adapter"], req.rating).inc()
         return {"status": "recorded"}
+
+    @app.get("/monitoring")
+    def monitoring() -> dict:
+        """Rolling-window quality, drift and alert status of each live adapter."""
+        stats = monitor.check()
+        publish_window_metrics(stats)
+        return {
+            "window_size": config.monitor.window_size,
+            "min_samples": config.monitor.min_samples,
+            "adapters": {
+                a: {**s.to_dict(), "thresholds": config.monitor.thresholds[a].model_dump()}
+                for a, s in stats.items()
+            },
+        }
 
     @app.get("/models")
     def models() -> dict:

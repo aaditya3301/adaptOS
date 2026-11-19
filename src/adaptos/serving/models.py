@@ -17,6 +17,7 @@ from typing import Any
 
 from adaptos.config import AppConfig, Settings
 from adaptos.log import get_logger
+from adaptos.monitoring.drift import REFERENCE_FILE, load_reference
 from adaptos.monitoring.metrics import LIVE_VERSION, MODEL_SWAPS
 from adaptos.registry import adapters as registry
 from adaptos.routing import RouteDecision, RouterModel, sentence_embedder
@@ -55,6 +56,7 @@ class ModelManager:
         self.router: RouterModel | None = None
         self.live: dict[str, str] = {}  # model ("router" or task) -> registry version
         self.engine_names: dict[str, str] = {}  # task -> adapter name inside the engine
+        self.references: dict[str, dict] = {}  # task -> drift reference of the live version
         self.ready = False
         self.error: str | None = None
         self._lock = threading.Lock()  # one reload/rollback at a time
@@ -98,6 +100,7 @@ class ModelManager:
         if champ is None:
             if model != ROUTER and model in self.engine_names:
                 self.engine.unload_adapter(self.engine_names.pop(model))
+                self.references.pop(model, None)
             elif model == ROUTER:
                 self.router = None
             self.live.pop(model, None)
@@ -121,11 +124,34 @@ class ModelManager:
             self.engine_names[model] = new_name  # switch traffic
             if previous and previous != new_name:
                 self.engine.unload_adapter(previous)  # then drop the old version
+            reference = self._drift_reference(path, getattr(champ, "source", None))
+            if reference is None:
+                self.references.pop(model, None)
+                logger.warning("%s v%s has no drift reference", model, champ.version)
+            else:
+                self.references[model] = reference
         self.live[model] = champ.version
         LIVE_VERSION.labels(model).set(int(champ.version))
         MODEL_SWAPS.labels(model, "load" if old is None else "swap").inc()
         logger.info("%s: serving v%s (was %s)", model, champ.version, old)
         return {"model": model, "from": old, "to": champ.version}
+
+    def _drift_reference(self, path: Path, source: str | None) -> dict | None:
+        """The version's drift reference; fetched separately if the cached copy predates it."""
+        reference = load_reference(path)
+        if reference is None and source:
+            try:
+                import mlflow
+
+                mlflow.artifacts.download_artifacts(
+                    artifact_uri=f"{source}/{REFERENCE_FILE}",
+                    dst_path=str(path),
+                    tracking_uri=self.settings.mlflow_tracking_uri,
+                )
+                reference = load_reference(path)
+            except Exception:
+                return None
+        return reference
 
     def reload(self, model: str | None = None) -> list[dict[str, Any]]:
         """Follow the registry: hot-swap every model (or one) whose champion changed."""
