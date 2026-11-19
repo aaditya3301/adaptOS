@@ -1,0 +1,29 @@
+# Online monitoring and retraining-trigger settings.
+#
+# Thresholds were calibrated on the Phase 3 evaluation outputs (golden = normal traffic,
+# drift_eval = the held-out new kind of request):
+#
+#   online quality      golden   drift       feature drift (window of 50)  normal p99   drift
+#   sql                 0.93     0.68        sql (asks_aggregate)          0.36         2.81
+#   summarize           0.90     0.87        summarize (turns)             0.37         2.52
+#   math                0.87     0.79        math (words)                  0.45         0.86
+#
+# Quality catches sql drift; feature drift catches all three. Quality thresholds are set to
+# flag real breakage without firing on normal variation.
+
+check_interval_seconds: 30      # how often the gateway refreshes window metrics
+window_size: 50                 # recent requests per adapter (live version only)
+min_samples: 30                 # do not judge an adapter on fewer requests than this
+retrain_cooldown_minutes: 30    # never retrain the same adapter twice within this period
+
+# Alert when window quality < quality_min OR feature drift > drift_max.
+thresholds:
+  sql:
+    quality_min: 0.80
+    drift_max: 1.0
+  summarize:
+    quality_min: 0.80
+    drift_max: 1.0
+  math:
+    quality_min: 0.80
+    drift_max: 0.70
