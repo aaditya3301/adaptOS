@@ -20,6 +20,22 @@ backends:
 mlflow:
   experiment_prefix: adaptos
 
+retraining:
+  executor: local          # local | aws (aws launches a temporary GPU instance per run)
+  warm_start: true         # continue from the champion adapter instead of starting over
+  new_data_splits: [drift_train]  # freshly labeled data for the new kind of request
+  replay_ratio: 1.0        # old training examples replayed per new example (rehearsal),
+                           # so the adapter does not forget what it already does well
+  epochs: 2
+  max_runs_per_day: 3      # hard cap per adapter, on top of the cooldown in monitor.yaml
+  gateway_url: http://localhost:8000
+
+serving:
+  dtype: bfloat16          # measured on CPU: faster than float32 and ~40% less memory
+  num_threads: 6
+  base_max_new_tokens: 256 # for requests answered by the plain base model
+  max_input_chars: 8000
+
 router:
   embedding_model: sentence-transformers/all-MiniLM-L6-v2
   embedding_revision: 1110a243fdf4706b3f48f1d95db1a4f5529b4d41

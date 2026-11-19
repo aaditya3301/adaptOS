@@ -58,6 +58,16 @@ class MLflowConfig(BaseModel):
     experiment_prefix: str = "adaptos"
 
 
+class RetrainingConfig(BaseModel):
+    executor: Literal["local", "aws"] = "local"
+    warm_start: bool = True
+    new_data_splits: list[str] = Field(default_factory=lambda: ["drift_train"])
+    replay_ratio: float = Field(default=1.0, ge=0.0)
+    epochs: float = Field(default=2, gt=0)
+    max_runs_per_day: int = Field(default=3, gt=0)
+    gateway_url: str = "http://localhost:8000"
+
+
 class ServingConfig(BaseModel):
     dtype: Literal["float32", "bfloat16"] = "bfloat16"
     num_threads: int | None = Field(default=None, gt=0)
@@ -183,6 +193,7 @@ class AppConfig(BaseModel):
     backends: BackendConfig
     mlflow: MLflowConfig
     serving: ServingConfig = Field(default_factory=ServingConfig)
+    retraining: RetrainingConfig = Field(default_factory=RetrainingConfig)
     router: RouterConfig
     adapters: dict[str, AdapterConfig]
     monitor: MonitorConfig
