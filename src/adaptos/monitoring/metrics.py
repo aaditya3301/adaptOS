@@ -38,6 +38,31 @@ GENERATION_LATENCY = Histogram(
 OUTPUT_TOKENS = Counter("adaptos_output_tokens_total", "Generated tokens", ["adapter"])
 FEEDBACK = Counter("adaptos_feedback_total", "User feedback", ["adapter", "rating"])
 
+# ---- Online quality and rolling-window health (refreshed by the monitor loop)
+QUALITY_SCORE = Histogram(
+    "adaptos_quality_score",
+    "Reference-free quality score of each answer",
+    ["adapter"],
+    buckets=(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
+)
+WINDOW_QUALITY = Gauge(
+    "adaptos_window_quality", "Mean quality over the adapter's recent window", ["adapter"]
+)
+WINDOW_DRIFT = Gauge(
+    "adaptos_window_drift", "Feature-drift score of the adapter's recent window", ["adapter"]
+)
+WINDOW_DRIFT_FEATURE = Gauge(
+    "adaptos_window_drift_feature",
+    "Standardized shift of each request feature vs the training reference",
+    ["adapter", "feature"],
+)
+WINDOW_SAMPLES = Gauge("adaptos_window_samples", "Requests in the window", ["adapter"])
+ADAPTER_ALERT = Gauge(
+    "adaptos_adapter_alert", "1 when the adapter's window breaches a threshold", ["adapter"]
+)
+QUALITY_THRESHOLD = Gauge("adaptos_quality_threshold", "Configured quality_min", ["adapter"])
+DRIFT_THRESHOLD = Gauge("adaptos_drift_threshold", "Configured drift_max", ["adapter"])
+
 # ---- Deployed versions: 1 for the live version of each model
 LIVE_VERSION = Gauge(
     "adaptos_live_model_version",

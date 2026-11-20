@@ -104,12 +104,21 @@ class RequestStore:
         return dict(row) if row else None
 
     def recent(
-        self, adapter: str, version: str | None = None, limit: int = 50
+        self,
+        adapter: str,
+        version: str | None = None,
+        limit: int = 50,
+        since: datetime | None = None,
     ) -> list[dict[str, Any]]:
-        """Most recent requests served by ``adapter`` (optionally one version), newest first."""
+        """Most recent requests served by ``adapter``, newest first.
+
+        ``version`` keeps one adapter version; ``since`` keeps requests after a timestamp.
+        """
         query = select(requests_table).where(requests_table.c.adapter == adapter)
         if version is not None:
             query = query.where(requests_table.c.adapter_version == str(version))
+        if since is not None:
+            query = query.where(requests_table.c.created_at >= since)
         query = query.order_by(requests_table.c.created_at.desc()).limit(limit)
         with self.engine.connect() as conn:
             rows = conn.execute(query).mappings().all()

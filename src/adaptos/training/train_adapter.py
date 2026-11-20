@@ -2,7 +2,7 @@
 
 Usage:
     python -m adaptos.training.train_adapter --adapter sql
-    python -m adaptos.training.train_adapter --adapter sql --test-model --max-steps 5
+    python -m adaptos.training.train_adapter --adapter sql --max-steps 5
 
 The same function is reused by the retraining pipeline (Phase 7), which passes extra data
 splits, a starting adapter and a trigger reason.
@@ -155,7 +155,6 @@ def _lr_lambda(warmup: int, total: int):
 def train_adapter(
     task: str,
     *,
-    use_test_model: bool = False,
     splits: Sequence[str] = ("train",),
     split_limits: dict[str, int] | None = None,
     extra_examples: Sequence[Example] = (),
@@ -186,7 +185,7 @@ def train_adapter(
     cfg = app.adapters[task]
     tcfg = cfg.training if epochs is None else cfg.training.model_copy(update={"epochs": epochs})
     base = app.base_model
-    model_id, revision = base.resolve(use_test_model)
+    model_id, revision = base.name, base.revision
     device = device or base.device
     backend = backend or app.backends.training
     if device == "cuda" and not torch.cuda.is_available():
@@ -467,7 +466,6 @@ def main(argv: Sequence[str] | None = None) -> None:
     adapters = sorted(load_config(settings.config_dir).adapters)
     p = argparse.ArgumentParser(description="Train a LoRA adapter and register it in MLflow")
     p.add_argument("--adapter", choices=[*adapters, "all"], required=True)
-    p.add_argument("--test-model", action="store_true", help="use the small test base model")
     p.add_argument("--max-steps", type=int, help="stop after N optimizer steps (smoke runs)")
     p.add_argument("--limit", type=int, help="use only the first N training examples")
     p.add_argument("--no-mlflow", action="store_true")
@@ -478,7 +476,6 @@ def main(argv: Sequence[str] | None = None) -> None:
     for task in adapters if args.adapter == "all" else [args.adapter]:
         train_adapter(
             task,
-            use_test_model=args.test_model,
             max_steps=args.max_steps,
             limit=args.limit,
             use_mlflow=not args.no_mlflow,

@@ -36,22 +36,13 @@ class Settings(BaseSettings):
 class LLMConfig(BaseModel):
     name: str
     revision: str = Field(min_length=7)
-    test_name: str
-    test_revision: str = Field(min_length=7)
     device: Literal["cpu", "cuda"] = "cpu"
     dtype: Literal["float32", "bfloat16", "float16"] = "float32"
     num_threads: int | None = Field(default=None, gt=0)
 
-    def resolve(self, use_test_model: bool = False) -> tuple[str, str]:
-        """(model id, pinned revision) for the main or the small test model."""
-        return (
-            (self.test_name, self.test_revision) if use_test_model else (self.name, self.revision)
-        )
-
 
 class BackendConfig(BaseModel):
     training: Literal["lora", "qlora"] = "lora"
-    inference: Literal["peft", "vllm"] = "peft"
 
 
 class MLflowConfig(BaseModel):
@@ -59,7 +50,6 @@ class MLflowConfig(BaseModel):
 
 
 class RetrainingConfig(BaseModel):
-    executor: Literal["local", "aws"] = "local"
     warm_start: bool = True
     new_data_splits: list[str] = Field(default_factory=lambda: ["drift_train"])
     replay_ratio: float = Field(default=1.0, ge=0.0)

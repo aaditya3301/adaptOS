@@ -49,16 +49,21 @@ _SCHEMA_STMT = re.compile(r"^\s*CREATE\s+TABLE\b", re.IGNORECASE)
 _SELECT_STMT = re.compile(r"^\s*(SELECT|WITH)\b", re.IGNORECASE)
 
 
-def sql_executes(schema: str, query: str) -> bool:
-    """True if ``query`` runs against an empty in-memory database built from ``schema``.
+def is_safe_sql(schema: str, query: str) -> bool:
+    """Only CREATE TABLE statements in the schema and a single SELECT/WITH query.
 
-    Only CREATE TABLE statements and a single SELECT are allowed, so dataset content can
-    never ATTACH files, change PRAGMAs or run anything else.
+    Dataset content and model output are untrusted, so they may never ATTACH files,
+    change PRAGMAs or run anything other than reads.
     """
     statements = [s for s in schema.split(";") if s.strip()]
     if not statements or not all(_SCHEMA_STMT.match(s) for s in statements):
         return False
-    if not _SELECT_STMT.match(query) or ";" in query.rstrip().rstrip(";"):
+    return bool(_SELECT_STMT.match(query)) and ";" not in query.rstrip().rstrip(";")
+
+
+def sql_executes(schema: str, query: str) -> bool:
+    """True if ``query`` runs against an empty in-memory database built from ``schema``."""
+    if not is_safe_sql(schema, query):
         return False
     conn = sqlite3.connect(":memory:")
     try:

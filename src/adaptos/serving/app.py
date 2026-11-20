@@ -8,7 +8,7 @@ Run with:  uvicorn adaptos.serving.app:create_app --factory --port 8000
     GET  /monitoring        rolling-window quality, drift and alert status per adapter
     POST /admin/reload      hot-swap to the registry's current champions   (X-Admin-Token)
     POST /admin/rollback    move a model back to its previous version      (X-Admin-Token)
-    GET  /health /ready /info /metrics
+    GET  /health /ready /metrics
 """
 
 from __future__ import annotations
@@ -89,6 +89,9 @@ class FeedbackRequest(BaseModel):
 
 class ModelRequest(BaseModel):
     model: str | None = Field(default=None, description="'router', a task name, or all")
+    force: bool = Field(
+        default=False, description="reload: redeploy unchanged versions (restarts monitoring)"
+    )
 
 
 def _mlflow_reachable(tracking_uri: str, timeout: float = 2.0) -> bool:
@@ -126,7 +129,9 @@ def create_app(
     known_models = {ROUTER, *config.adapters}
     monitor = Monitor(
         config.monitor,
-        recent=lambda adapter, version, limit: store.recent(adapter, version, limit),
+        recent=lambda adapter, version, limit: store.recent(
+            adapter, version, limit, since=manager.live_since.get(adapter)
+        ),
         live=lambda: {m: v for m, v in manager.live.items() if m != ROUTER},
         reference=lambda adapter: manager.references.get(adapter),
     )
@@ -277,7 +282,7 @@ def create_app(
     def admin_reload(req: ModelRequest) -> dict:
         if req.model is not None and req.model not in known_models:
             raise HTTPException(422, f"unknown model '{req.model}'")
-        return {"changes": manager.reload(req.model), "live": manager.live}
+        return {"changes": manager.reload(req.model, force=req.force), "live": manager.live}
 
     @app.post("/admin/rollback", dependencies=[Depends(require_admin), Depends(require_ready)])
     def admin_rollback(req: ModelRequest) -> dict:
@@ -308,18 +313,6 @@ def create_app(
         if manager.error:
             body["error"] = manager.error
         return JSONResponse(status_code=200 if ok else 503, content=body)
-
-    @app.get("/info")
-    def info() -> dict:
-        return {
-            "version": __version__,
-            "base_model": config.base_model.name,
-            "backends": config.backends.model_dump(),
-            "adapters": {
-                name: {"description": a.description, "registered_model": a.registered_model}
-                for name, a in config.adapters.items()
-            },
-        }
 
     @app.get("/metrics")
     def metrics() -> Response:

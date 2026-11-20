@@ -12,6 +12,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -57,6 +58,9 @@ class ModelManager:
         self.live: dict[str, str] = {}  # model ("router" or task) -> registry version
         self.engine_names: dict[str, str] = {}  # task -> adapter name inside the engine
         self.references: dict[str, dict] = {}  # task -> drift reference of the live version
+        # When a version was (re)deployed by a swap or rollback. The monitor judges it only on
+        # traffic since then, so a rolled-back version is not blamed for its old history.
+        self.live_since: dict[str, datetime] = {}
         self.ready = False
         self.error: str | None = None
         self._lock = threading.Lock()  # one reload/rollback at a time
@@ -91,8 +95,12 @@ class ModelManager:
             self.error = f"{type(e).__name__}: {e}"
             logger.exception("model loading failed")
 
-    def _sync(self, model: str) -> dict[str, Any] | None:
-        """Bring one model in line with its registry champion. Returns the change, if any."""
+    def _sync(self, model: str, force: bool = False) -> dict[str, Any] | None:
+        """Bring one model in line with its registry champion. Returns the change, if any.
+
+        ``force`` redeploys an unchanged champion: weights stay loaded, but its monitoring
+        window restarts (e.g. before a demo, or after fixing an upstream data problem).
+        """
         uri = self.settings.mlflow_tracking_uri
         name = self._registered_name(model)
         champ = registry.get_alias_version(name, registry.CHAMPION, uri)
@@ -106,7 +114,12 @@ class ModelManager:
             self.live.pop(model, None)
             return None if old is None else {"model": model, "from": old, "to": None}
         if old == champ.version:
-            return None
+            if not force:
+                return None
+            self.live_since[model] = datetime.now(UTC)
+            MODEL_SWAPS.labels(model, "redeploy").inc()
+            logger.info("%s: v%s redeployed, monitoring window restarted", model, old)
+            return {"model": model, "from": old, "to": old, "window_reset": True}
 
         path = registry.cached_download(self._cache(), name, champ.version, uri)
         if model == ROUTER:
@@ -131,6 +144,10 @@ class ModelManager:
             else:
                 self.references[model] = reference
         self.live[model] = champ.version
+        if old is None:
+            self.live_since.pop(model, None)  # first load: the version's whole history counts
+        else:
+            self.live_since[model] = datetime.now(UTC)
         LIVE_VERSION.labels(model).set(int(champ.version))
         MODEL_SWAPS.labels(model, "load" if old is None else "swap").inc()
         logger.info("%s: serving v%s (was %s)", model, champ.version, old)
@@ -153,11 +170,11 @@ class ModelManager:
                 return None
         return reference
 
-    def reload(self, model: str | None = None) -> list[dict[str, Any]]:
+    def reload(self, model: str | None = None, force: bool = False) -> list[dict[str, Any]]:
         """Follow the registry: hot-swap every model (or one) whose champion changed."""
         models = [model] if model else [ROUTER, *sorted(self.app.adapters)]
         with self._lock:
-            return [c for m in models if (c := self._sync(m)) is not None]
+            return [c for m in models if (c := self._sync(m, force)) is not None]
 
     def rollback(self, model: str) -> list[dict[str, Any]]:
         """Point the champion alias back to the previous version, then hot-swap to it."""

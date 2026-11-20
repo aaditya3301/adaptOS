@@ -2,14 +2,13 @@
 
     python -m adaptos.retraining.controller --once          # one check (demo)
     python -m adaptos.retraining.controller                 # keep watching
-    python -m adaptos.retraining.controller --once --executor aws
 
 Each cycle:
     1. read GET /monitoring from the gateway
     2. for every adapter in "alert": skip if it was retrained within the cooldown or hit the
        daily cap; otherwise open a retraining run in MLflow (experiment ``adaptos-retraining``)
        that records why it was triggered
-    3. run the retraining pipeline (locally, or on a temporary AWS GPU instance)
+    3. run the retraining pipeline
     4. if the gate promoted the new version, tell the gateway to hot-swap to it
        (POST /admin/reload); the alert then clears because the window only counts the live
        version, and its drift reference now includes the new kind of request
@@ -19,8 +18,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import shutil
 import subprocess
 import sys
 import time
@@ -52,22 +49,7 @@ def http_json(method: str, url: str, body: dict | None = None, headers: dict | N
         return json.load(r)
 
 
-def bash_executable() -> str:
-    """Git Bash on Windows (plain 'bash' there may be WSL, which lacks this machine's AWS setup)."""
-    if os.name == "nt" and (git := shutil.which("git")):
-        candidate = Path(git).resolve().parents[1] / "bin" / "bash.exe"
-        if candidate.exists():
-            return str(candidate)
-    return shutil.which("bash") or "bash"
-
-
-def pipeline_command(executor: str, task: str, run_id: str) -> list[str]:
-    if executor == "aws":
-        step = (
-            f"adaptos.retraining.pipeline --task {task} --device cuda --backend qlora "
-            f"--parent-run-id {run_id}"
-        )
-        return [bash_executable(), str(REPO_ROOT / "scripts" / "aws_gpu_run.sh"), step]
+def pipeline_command(task: str, run_id: str) -> list[str]:
     return [sys.executable, "-m", "adaptos.retraining.pipeline", "--task", task,
             "--parent-run-id", run_id]  # fmt: skip
 
@@ -77,15 +59,15 @@ class Controller:
         self,
         app: AppConfig,
         settings: Settings,
-        executor: str | None = None,
         http: Callable[..., Any] = http_json,
         run_command: Callable[[list[str], Path], int] | None = None,
         clock: Callable[[], float] = time.time,
+        ignore_cooldown: bool = False,
     ):
         import mlflow
 
         self.app, self.settings = app, settings
-        self.executor = executor or app.retraining.executor
+        self.ignore_cooldown = ignore_cooldown
         self.http = http
         self.run_command = run_command or self._run_logged
         self.clock = clock
@@ -105,9 +87,12 @@ class Controller:
         )
 
     def allowed(self, task: str) -> tuple[bool, str]:
-        """Cooldown and daily cap stop a persistent alert from retraining in a loop."""
+        """Cooldown and daily cap stop a persistent alert from retraining in a loop.
+
+        ``ignore_cooldown`` (demos) skips the cooldown; the daily cap always applies.
+        """
         cooldown = self.app.monitor.retrain_cooldown_minutes * 60
-        if self.recent_runs(task, cooldown):
+        if not self.ignore_cooldown and self.recent_runs(task, cooldown):
             return False, f"retrained less than {self.app.monitor.retrain_cooldown_minutes} min ago"
         if len(self.recent_runs(task, DAY_SECONDS)) >= self.app.retraining.max_runs_per_day:
             return False, f"reached {self.app.retraining.max_runs_per_day} runs in 24h"
@@ -136,7 +121,7 @@ class Controller:
         uri = self.settings.mlflow_tracking_uri
         before = registry.get_alias_version(cfg.registered_model, registry.CHAMPION, uri)
         reasons = "; ".join(stats["reasons"])
-        logger.info("%s: ALERT (%s) -> retraining with executor '%s'", task, reasons, self.executor)
+        logger.info("%s: ALERT (%s) -> retraining", task, reasons)
 
         started = self.clock()
         stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
@@ -146,7 +131,6 @@ class Controller:
                 {
                     "task": task,
                     "stage": "retraining",
-                    "executor": self.executor,
                     "trigger_reason": reasons,
                     "champion_before": before.version if before else "none",
                 }
@@ -163,7 +147,7 @@ class Controller:
                 }
             )
             log_path = self.settings.artifacts_dir / "retraining" / f"{run_id}.log"
-            code = self.run_command(pipeline_command(self.executor, task, run_id), log_path)
+            code = self.run_command(pipeline_command(task, run_id), log_path)
             if log_path.exists():
                 self.mlflow.log_artifact(str(log_path))
 
@@ -224,9 +208,15 @@ def main(argv: Sequence[str] | None = None) -> None:
     configure_logging(settings.log_level)
     p = argparse.ArgumentParser(description="Watch adapter health and retrain on alerts")
     p.add_argument("--once", action="store_true", help="run a single check and exit")
-    p.add_argument("--executor", choices=["local", "aws"], help="override retraining.executor")
+    p.add_argument(
+        "--ignore-cooldown", action="store_true", help="skip the cooldown (daily cap still applies)"
+    )
     args = p.parse_args(argv)
-    controller = Controller(load_config(settings.config_dir), settings, executor=args.executor)
+    controller = Controller(
+        load_config(settings.config_dir),
+        settings,
+        ignore_cooldown=args.ignore_cooldown,
+    )
     if args.once:
         print(json.dumps(controller.check(), indent=2, default=str))
     else:

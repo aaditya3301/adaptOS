@@ -50,12 +50,9 @@ def score_predictions(
 
 
 def cached_adapter(settings: Settings, model_name: str, version: str) -> Path:
-    """Download a registered adapter version once and reuse it afterwards."""
-    dst = settings.artifacts_dir / "registry_cache" / model_name / f"v{version}"
-    found = list(dst.rglob("adapter_config.json"))
-    if found:
-        return found[0].parent
-    return registry.download_adapter(model_name, version, dst, settings.mlflow_tracking_uri)
+    return registry.cached_download(
+        settings.artifacts_dir / "registry_cache", model_name, version, settings.mlflow_tracking_uri
+    )
 
 
 def evaluate_task(

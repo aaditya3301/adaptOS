@@ -17,6 +17,7 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -32,6 +33,46 @@ def post(url: str, body: dict) -> dict:
         return json.load(r)
 
 
+def get(url: str) -> dict:
+    with urllib.request.urlopen(url, timeout=60) as r:
+        return json.load(r)
+
+
+def simulate(
+    task: str,
+    split: str,
+    n: int,
+    gateway: str = "http://localhost:8000",
+    seed: int = 0,
+    verbose: bool = True,
+) -> dict[str, Any]:
+    """Send ``n`` requests from ``split``; return a summary plus the monitor's view."""
+    examples = load_split(ROOT / "data" / "processed" / task, split)
+    random.Random(seed).shuffle(examples)
+    qualities, routed = [], {}
+    start = time.time()
+    for i, ex in enumerate(examples[:n], 1):
+        r = post(f"{gateway}/chat", {"message": ex.input})
+        routed[r["adapter"]] = routed.get(r["adapter"], 0) + 1
+        if r["quality"] is not None:
+            qualities.append(r["quality"])
+        if verbose:
+            quality = "-" if r["quality"] is None else f"{r['quality']:.2f}"
+            print(
+                f"  [{i:3d}/{n}] {r['adapter']:>9} v{r['adapter_version'] or '-'} "
+                f"quality {quality:<5} {r['latency_ms'] / 1000:5.1f}s  {r['answer'][:60]!r}",
+                flush=True,
+            )
+    monitor = get(f"{gateway}/monitoring")["adapters"][task]
+    return {
+        "requests": n,
+        "seconds": round(time.time() - start),
+        "routed": routed,
+        "mean_quality": statistics.mean(qualities) if qualities else None,
+        "monitor": monitor,
+    }
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--task", required=True, choices=["sql", "summarize", "math"])
@@ -43,31 +84,15 @@ def main() -> None:
     # Model answers can contain any character; don't crash on consoles like Windows cp1252.
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-    examples = load_split(ROOT / "data" / "processed" / args.task, args.split)
-    random.Random(args.seed).shuffle(examples)
-    qualities, routed = [], {}
-    start = time.time()
-    for i, ex in enumerate(examples[: args.n], 1):
-        r = post(f"{args.gateway}/chat", {"message": ex.input})
-        routed[r["adapter"]] = routed.get(r["adapter"], 0) + 1
-        if r["quality"] is not None:
-            qualities.append(r["quality"])
-        print(
-            f"[{i:3d}/{args.n}] {r['adapter']:>9} v{r['adapter_version'] or '-'} "
-            f"quality {r['quality'] if r['quality'] is not None else '-':<5} "
-            f"{r['latency_ms'] / 1000:5.1f}s  {r['answer'][:70]!r}",
-            flush=True,
-        )
-    mean_q = statistics.mean(qualities) if qualities else float("nan")
+    s = simulate(args.task, args.split, args.n, args.gateway, args.seed)
+    m = s["monitor"]
     print(
-        f"\n{args.n} {args.split} requests in {time.time() - start:.0f}s | routed: {routed} "
-        f"| mean quality {mean_q:.3f}"
+        f"\n{s['requests']} {args.split} requests in {s['seconds']}s | routed: {s['routed']} "
+        f"| mean quality {s['mean_quality']}"
     )
-    status = json.load(urllib.request.urlopen(f"{args.gateway}/monitoring", timeout=60))
-    s = status["adapters"][args.task]
     print(
-        f"monitor[{args.task}]: status={s['status']} samples={s['samples']} "
-        f"quality={s['quality']} drift={s['drift']} reasons={s['reasons']}"
+        f"monitor[{args.task}]: status={m['status']} samples={m['samples']} "
+        f"quality={m['quality']} drift={m['drift']} reasons={m['reasons']}"
     )
 
 

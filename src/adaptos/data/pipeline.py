@@ -17,7 +17,6 @@ import argparse
 import hashlib
 import json
 import random
-import subprocess
 from collections import Counter
 from collections.abc import Iterable, Sequence
 from pathlib import Path
@@ -28,6 +27,7 @@ from adaptos.data.formatters import Rejected, get_formatter
 from adaptos.data.io import MANIFEST, sha256_file, write_jsonl
 from adaptos.data.schema import Example
 from adaptos.log import configure_logging, get_logger
+from adaptos.provenance import git_commit
 
 logger = get_logger(__name__)
 
@@ -105,19 +105,6 @@ def build_splits(
     return splits, stats
 
 
-def _git_commit() -> str:
-    try:
-        sha = subprocess.run(
-            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
-        ).stdout.strip()
-        dirty = subprocess.run(
-            ["git", "status", "--porcelain"], capture_output=True, text=True, check=True
-        ).stdout.strip()
-        return f"{sha}{'-dirty' if dirty else ''}"
-    except (OSError, subprocess.CalledProcessError):
-        return "unknown"
-
-
 def _avg(values: Iterable[int]) -> float:
     values = list(values)
     return round(sum(values) / len(values), 1) if values else 0.0
@@ -158,7 +145,7 @@ def write_dataset(
         "drift": {"rule": ds.drift.rule, "params": ds.drift.params},
         "splits": split_info,
         "filtering": stats,
-        "git_commit": _git_commit(),
+        "git_commit": git_commit(),
     }
     (out_dir / MANIFEST).write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"

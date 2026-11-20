@@ -17,7 +17,7 @@ from adaptos.evaluation.metrics import extract_answer, extract_sql
 
 # --------------------------------------------------------------------------- SQL
 
-_SCHEMA = re.compile(r"CREATE\s+TABLE\b[^;]*?\)", re.IGNORECASE | re.DOTALL)
+SCHEMA_STATEMENT = re.compile(r"CREATE\s+TABLE\b[^;]*?\)", re.IGNORECASE | re.DOTALL)
 AGG_INTENT = re.compile(
     r"\b(how many|number of|count|total|sum|average|avg|mean|highest|lowest|maximum|minimum|"
     r"max|min|most|least|largest|smallest|biggest|fewest|greatest|top|best|worst|earliest|latest)\b",
@@ -28,7 +28,7 @@ AGG_SQL = re.compile(r"\b(COUNT|SUM|AVG|MIN|MAX)\s*\(|\bGROUP\s+BY\b|\bORDER\s+B
 
 def score_sql(user_input: str, output: str) -> dict[str, Any]:
     """Valid SQL for the given schema, and aggregation used when the question asks for one."""
-    schema = "; ".join(_SCHEMA.findall(user_input))
+    schema = "; ".join(SCHEMA_STATEMENT.findall(user_input))
     question = user_input.split("Question:", 1)[-1]
     sql = extract_sql(output)
     valid = bool(schema) and sql_executes(schema, sql)

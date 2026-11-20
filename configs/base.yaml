@@ -6,8 +6,6 @@ project: adaptos
 base_model:
   name: Qwen/Qwen2.5-0.5B-Instruct                 # used for real training/serving
   revision: 7ae557604adf67be50417f59c2c2f167def9a775  # pinned model commit
-  test_name: HuggingFaceTB/SmolLM2-135M-Instruct     # small model for quick experiments
-  test_revision: 12fd25f77366fa6b3b4b768ec3050bf629380bac
   device: cpu
   dtype: float32
   num_threads: 6                                     # = physical CPU cores
@@ -15,13 +13,11 @@ base_model:
 # Pluggable backends: CPU-friendly defaults; GPU options can be switched in later.
 backends:
   training: lora    # lora | qlora (qlora needs an NVIDIA GPU)
-  inference: peft   # peft | vllm  (vllm needs an NVIDIA GPU)
 
 mlflow:
   experiment_prefix: adaptos
 
 retraining:
-  executor: local          # local | aws (aws launches a temporary GPU instance per run)
   warm_start: true         # continue from the champion adapter instead of starting over
   new_data_splits: [drift_train]  # freshly labeled data for the new kind of request
   replay_ratio: 1.0        # old training examples replayed per new example (rehearsal),

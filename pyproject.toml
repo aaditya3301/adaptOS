@@ -40,13 +40,11 @@ router = [
 ]
 gpu = [
     "bitsandbytes>=0.45",   # 4-bit quantization for QLoRA (NVIDIA GPU only)
-    "nvidia-ml-py>=12.0",   # GPU utilization in MLflow system metrics
 ]
 dev = [
     "pytest>=8.3",
     "httpx>=0.27",
     "ruff>=0.8",
-    "pre-commit>=4.0",
 ]
 
 [tool.setuptools.packages.find]

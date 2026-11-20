@@ -102,7 +102,7 @@ def env(tmp_path, monkeypatch):
         app_cfg, settings, engine_factory=lambda: engine, embed_factory=lambda m, r: keyword_embed
     )
     store = RequestStore(settings.database_url)
-    app = create_app(settings, manager=manager, store=store, load_models=False)
+    app = create_app(settings, manager=manager, store=store, load_models=False, monitor_loop=False)
     with TestClient(app) as client:
         yield SimpleNamespace(
             client=client, manager=manager, engine=engine, registry=fake, store=store,
@@ -122,9 +122,8 @@ ADMIN = {"X-Admin-Token": "secret"}
 
 
 # ------------------------------------------------------------------------ status
-def test_health_and_info(env):
+def test_health(env):
     assert env.client.get("/health").json() == {"status": "ok"}
-    assert set(env.client.get("/info").json()["adapters"]) == {"sql", "summarize", "math"}
 
 
 def test_chat_is_unavailable_until_models_load(env):
@@ -253,3 +252,52 @@ def test_metrics(ready):
     assert 'adaptos_routed_requests_total{adapter="sql",reason="adapter"}' in text
     assert 'adaptos_live_model_version{model="sql"}' in text
     assert 'adaptos_http_requests_total{method="POST",path="/chat",status="200"}' in text
+
+
+# -------------------------------------------------------------------- monitoring
+def test_chat_returns_and_stores_quality(ready):
+    body = ready.client.post("/chat", json={"message": SQL}).json()
+    # FakeEngine answers are not SQL -> the online check scores them 0.0
+    assert body["quality"] == 0.0
+    row = ready.store.get(body["request_id"])
+    assert row["quality_score"] == 0.0 and '"valid_sql": false' in row["quality_checks"]
+    assert ready.client.post("/chat", json={"message": "hi"}).json()["quality"] is None
+
+
+def test_monitoring_endpoint(ready):
+    for _ in range(3):
+        ready.client.post("/chat", json={"message": SQL})
+    body = ready.client.get("/monitoring").json()
+    sql = body["adapters"]["sql"]
+    assert sql["version"] == "1" and sql["samples"] == 3
+    assert sql["status"] in ("insufficient_data", "no_reference")
+    assert sql["thresholds"] == {"quality_min": 0.8, "drift_max": 1.0}
+    assert "adaptos_window_samples" in ready.client.get("/metrics").text
+
+
+def test_redeployed_version_is_judged_only_on_new_traffic(ready):
+    for _ in range(3):
+        ready.client.post("/chat", json={"message": SQL})
+    assert ready.client.get("/monitoring").json()["adapters"]["sql"]["samples"] == 3
+    # v2 goes live, then we roll back to v1: v1's earlier requests no longer count
+    ready.registry.champion["adaptos-adapter-sql"] = "2"
+    ready.registry.previous["adaptos-adapter-sql"] = "1"
+    ready.client.post("/admin/reload", json={"model": "sql"}, headers=ADMIN)
+    ready.client.post("/admin/rollback", json={"model": "sql"}, headers=ADMIN)
+    sql = ready.client.get("/monitoring").json()["adapters"]["sql"]
+    assert sql["version"] == "1" and sql["samples"] == 0
+    ready.client.post("/chat", json={"message": SQL})
+    assert ready.client.get("/monitoring").json()["adapters"]["sql"]["samples"] == 1
+
+
+def test_forced_reload_restarts_the_window_of_an_unchanged_version(ready):
+    for _ in range(2):
+        ready.client.post("/chat", json={"message": SQL})
+    assert (
+        ready.client.post("/admin/reload", json={"model": "sql"}, headers=ADMIN).json()["changes"]
+        == []
+    )
+    r = ready.client.post("/admin/reload", json={"model": "sql", "force": True}, headers=ADMIN)
+    assert r.json()["changes"] == [{"model": "sql", "from": "1", "to": "1", "window_reset": True}]
+    assert "sql@v1" in ready.engine.adapters  # weights untouched
+    assert ready.client.get("/monitoring").json()["adapters"]["sql"]["samples"] == 0

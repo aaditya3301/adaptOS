@@ -1,8 +1,8 @@
 """Guided end-to-end demo of AdaptOS on the running stack.
 
-    python scripts/demo.py                    # retrain on the local CPU (slow, free)
-    python scripts/demo.py --executor aws     # retrain on a temporary AWS GPU (~$0.10)
+    python scripts/demo.py                    # full demo, pausing between steps
     python scripts/demo.py --yes              # no pauses between steps
+    python scripts/demo.py --no-retrain       # stop at the drift alert
 
 Story: the switchboard routes requests to the right adapter -> normal traffic is healthy ->
 a new kind of request arrives (drift) -> the monitor raises an alert -> the controller
@@ -68,11 +68,11 @@ class Demo:
             f"window {m['samples']} requests | quality {q} | drift {d}{reasons}"
         )
 
-    def admin_reload(self, model: str) -> dict:
+    def admin_reload(self, model: str, force: bool = False) -> dict:
         token = self.settings.admin_token or "dev-admin-token"  # docker-compose default
         req = urllib.request.Request(
             f"{self.gw}/admin/reload",
-            json.dumps({"model": model}).encode(),
+            json.dumps({"model": model, "force": force}).encode(),
             {"Content-Type": "application/json", "X-Admin-Token": token},
         )
         with urllib.request.urlopen(req, timeout=300) as resp:
@@ -120,11 +120,12 @@ class Demo:
         self.step(
             f"Start from {task} v{start}",
             f"For a repeatable demo, {task} v{start} (trained without the new kind of request) "
-            f"is made champion and hot-swapped in. Live now: v{live}.",
+            f"is made champion and deployed with a fresh monitoring window. Live now: v{live}.",
         )
         if live != start:
             registry.promote(self.model_name, start, self.uri)
-            print(f"  hot-swap: {self.admin_reload(task)['changes']}")
+        # force: even if v{start} is already live, restart its window so earlier runs don't count
+        print(f"  deploy: {self.admin_reload(task, force=True)['changes']}")
         print(f"  registry: {self.aliases()}")
 
         n_normal, n_drift = self.args.n_normal, self.args.n_drift
@@ -152,27 +153,29 @@ class Demo:
             print("  (no alert yet: send more drifted traffic or lower --n-normal)")
         if self.args.no_retrain:
             print("\n  --no-retrain: stopping here. Run the controller to heal it:")
-            print("  python -m adaptos.retraining.controller --once --executor aws")
+            print("  python -m adaptos.retraining.controller --once")
             return
 
         self.step(
             "Self-healing: the controller retrains",
-            f"The controller sees the alert and runs the retraining pipeline "
-            f"(executor: {self.args.executor}): warm start from the champion, new labeled data "
-            "plus rehearsal of old data, evaluation against the champion, promotion gate, "
-            "and a hot-swap of the gateway if the new version wins.",
+            "The controller sees the alert and runs the retraining pipeline: warm start from "
+            "the champion, new labeled data plus rehearsal of old data, evaluation against the "
+            "champion, promotion gate, and a hot-swap of the gateway if the new version wins.",
         )
         before = get(f"{self.gw}/models")["live"].get(task)
-        cmd = [sys.executable, "-m", "adaptos.retraining.controller", "--once",
-               "--executor", self.args.executor, "--ignore-cooldown"]  # fmt: skip
+        cmd = [sys.executable, "-m", "adaptos.retraining.controller", "--once", "--ignore-cooldown"]
         env = {**os.environ, "PYTHONUTF8": "1", "MLFLOW_DISABLE_AGENT_HINT": "1"}
         code = subprocess.call(cmd, cwd=ROOT, env=env)
         after = get(f"{self.gw}/models")["live"].get(task)
         print(f"\n  controller exit code {code} | live {task}: v{before} -> v{after}")
         print(f"  registry: {self.aliases()}")
+        if code != 0:
+            print("  The retraining pipeline FAILED; its log is attached to the run in the "
+                  "'adaptos-retraining' experiment in MLflow. Nothing was deployed.")  # fmt: skip
+            return
         if after == before:
-            print("  The gate did not promote a new version (or the daily cap was hit); "
-                  "see the 'adaptos-retraining' experiment in MLflow.")  # fmt: skip
+            print("  No new version was deployed: the gate rejected the candidate, or the "
+                  "daily retraining cap was reached ('adaptos-retraining' in MLflow).")  # fmt: skip
             return
 
         self.step(
@@ -195,7 +198,6 @@ class Demo:
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--task", default="sql", choices=["sql", "summarize", "math"])
-    p.add_argument("--executor", default="local", choices=["local", "aws"])
     p.add_argument("--start-version", default="1", help="version to start the demo from")
     p.add_argument("--n-normal", type=int, default=30)
     p.add_argument("--n-drift", type=int, default=35)
